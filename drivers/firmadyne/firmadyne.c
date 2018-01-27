@@ -19,6 +19,10 @@ short execute = 1;
 short reboot = 1;
 short procfs = 1;
 short syscall = 255;
+char* monitor_paths = "";
+short path_count = 0;
+char path_list[MAX_MONITOR_PATH][PATH_MAX];
+int path_length_list[MAX_MONITOR_PATH];
 
 module_param(devfs, short, 0660);
 MODULE_PARM_DESC(devfs, "Enable devfs stub device emulation");
@@ -30,6 +34,49 @@ module_param(procfs, short, 0660);
 MODULE_PARM_DESC(procfs, "Enable procfs stub device emulation");
 module_param(syscall, short, 0660);
 MODULE_PARM_DESC(syscall, "Loglevel bitmask for interception and printing of system calls");
+module_param(monitor_paths, charp, 0660);
+MODULE_PARM_DESC(monitor_paths, "Monitoring paths");
+
+static void parse_monitor_paths(void)
+{
+	int i = 0;
+        int curIdx = 0;
+        int monitorIdx = 0;
+        while (monitor_paths[curIdx])
+        {
+                switch (monitor_paths[curIdx])
+                {
+                        case ' ':
+                                break;
+                        case ';':
+				if (monitorIdx == 1)
+	                                path_length_list[path_count] = 0;
+				else
+					path_length_list[path_count] = monitorIdx;
+                                path_list[path_count][monitorIdx] = '\0';
+                                path_count++;
+                                monitorIdx = 0;
+                                break;
+                        default:
+                                path_list[path_count][monitorIdx++] = monitor_paths[curIdx];
+                                break;
+                }
+                curIdx++;
+        }
+
+        if (monitor_paths[curIdx - 1] != ';')
+        {
+		if (monitorIdx == 1)	// maybe '/'
+			path_length_list[path_count] = 0;
+		else
+	                path_length_list[path_count] = monitorIdx;
+	        path_list[path_count][monitorIdx] = '\0';
+                path_count++;
+        }
+
+        for (i = 0; i < path_count; i++)
+                printk("\n[MONITOR] monitor path%d : %s\n", i + 1, path_list[i]);
+}
 
 static int reboot_notify(struct notifier_block *nb, unsigned long code, void *unused) {
 	unregister_probes();
@@ -61,6 +108,8 @@ int __init init_module(void) {
 		printk(KERN_WARNING MODULE_NAME": register_procfs_stubs() = %d\n", tmp);
 		ret = tmp;
 	}
+
+	parse_monitor_paths();
 
 	register_reboot_notifier(&reboot_cb);
 

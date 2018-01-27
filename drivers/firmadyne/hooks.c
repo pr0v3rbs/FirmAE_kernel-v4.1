@@ -17,6 +17,8 @@
 #include "hooks.h"
 #include "hooks-private.h"
 
+extern int release_mode;
+
 /* Network related operations; e.g. bind, accept, etc */
 #define LEVEL_NETWORK (1 << 0)
 /* System operations; e.g. reboot, mount, ioctl, execve, etc */
@@ -27,6 +29,8 @@
 #define LEVEL_FS_R    (1 << 3)
 /* Process execution operations; e.g. mmap, fork, etc */
 #define LEVEL_EXEC    (1 << 4)
+/* DEBUG mode; e.g. execve on '/tmp/' directory */
+#define LEVEL_DEBUG   (1 << 5)
 
 #define SYSCALL_HOOKS \
 	/* Hook network binds */ \
@@ -75,6 +79,51 @@
 	HOOK("mmap_region", mmap_hook, mmap_probe)
 
 static char *envp_init[] = { "HOME=/", "TERM=linux", "LD_PRELOAD=/firmadyne/libnvram.so", NULL };
+static char *envp_init_release[] = { "HOME=/", "TERM=linux", "LD_PRELOAD=/firmadyne/libnvram_release.so", NULL };
+
+bool DirectoryCheck(const char __user *const __user *argv, const char __user *const __user *envp)
+{
+        if (argv && path_count > 0)
+        {
+                int i = 0;
+		if (argv[0][0] == '.')
+		{
+	                if (envp && argv[0][1] == '/')
+	                {
+	                        int cnt = count(envp, MAX_ARG_STRINGS);
+	                        const char* pwdPath = NULL;
+	                        for (i = 0; i >= 0 && i < cnt; i++)
+	                        {
+	                                if (!strncmp(envp[i], "PWD=", 4))
+	                                {
+	                                        pwdPath = envp[i] + 4;
+	                                        break;
+	                                }
+	                        }
+
+	                        if (pwdPath)
+	                        {
+	                                for (i = 0; i >= 0 && i < path_count; i++)
+	                                {
+	                                        if (!strncmp(pwdPath, path_list[i], path_length_list[i]))
+	                                                return true;
+	                                }
+	                        }
+	                }
+		}
+		else if (argv[0][0] == '/')
+		{
+	                for (i = 0; i >= 0 && i < path_count; i++)
+			{
+				if (!strncmp(argv[0], path_list[i], path_length_list[i]) && argv[0][path_length_list[i]] == '/')
+					return true;
+			}
+		}
+
+	}
+
+	return false;
+}
 
 static void socket_hook(int family, int type, int protocol) {
 	if (syscall & LEVEL_NETWORK) {
@@ -125,7 +174,10 @@ static void reboot_hook(int magic1, int magic2, unsigned int cmd, void __user *a
 		commit_creds(new);
 		printk(KERN_INFO MODULE_NAME": sys_reboot: removed CAP_SYS_BOOT, starting init...\n");
 
-		call_usermodehelper(argv_init[0], argv_init, envp_init, UMH_NO_WAIT);
+		if (release_mode == 1)
+			call_usermodehelper(argv_init[0], argv_init, envp_init_release, UMH_NO_WAIT);
+		else
+			call_usermodehelper(argv_init[0], argv_init, envp_init, UMH_NO_WAIT);
 	}
 
 out:
@@ -261,7 +313,10 @@ static void execve_hook(const char *filename, const char __user *const __user *a
 		execute = 0;
 
 		printk(KERN_INFO MODULE_NAME": do_execve: %s\n", argv_init[0]);
-		call_usermodehelper(argv_init[0], argv_init, envp_init, UMH_NO_WAIT);
+		if (release_mode == 1)
+			call_usermodehelper(argv_init[0], argv_init, envp_init_release, UMH_NO_WAIT);
+		else
+			call_usermodehelper(argv_init[0], argv_init, envp_init, UMH_NO_WAIT);
 
 		printk(KERN_WARNING "OFFSETS: offset of pid: 0x%x offset of comm: 0x%x\n", offsetof(struct task_struct, pid), offsetof(struct task_struct, comm));
 	}
@@ -280,6 +335,18 @@ static void execve_hook(const char *filename, const char __user *const __user *a
 			printk(KERN_CONT " %s", envp[i]);
 		}
 	}
+
+        if (syscall & LEVEL_DEBUG && DirectoryCheck(argv, envp))
+        {
+                printk("[MONITOR] [PID: %d (%s)]: argv:", task_pid_nr(current), current->comm);
+                for (i = 0; i >= 0 && i < count(argv, MAX_ARG_STRINGS); i++)
+                        printk(KERN_CONT " %s", argv[i]);
+
+                printk(KERN_CONT ", envp:");
+                for (i = 0; i >= 0 && i < count(envp, MAX_ARG_STRINGS); i++)
+                        printk(KERN_CONT " %s", envp[i]);
+                printk("\n\n");
+        }
 
 	jprobe_return();
 }

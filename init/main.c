@@ -158,8 +158,20 @@ static int __init set_reset_devices(char *str)
 
 __setup("reset_devices", set_reset_devices);
 
+int release_mode __read_mostly;
+
+static int __init setup_release_mode(char *str)
+{
+	get_option (&str, &release_mode);
+
+	return 1;
+}
+
+__setup("release-mode=", setup_release_mode);
+
 static const char *argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
 const char *envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", "LD_PRELOAD=/firmadyne/libnvram.so", NULL, };
+const char *envp_init_release[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", "LD_PRELOAD=/firmadyne/libnvram_release.so", NULL, };
 static const char *panic_later, *panic_param;
 
 extern const struct obs_kernel_param __setup_start[], __setup_end[];
@@ -294,15 +306,30 @@ static int __init unknown_bootoption(char *param, char *val, const char *unused)
 	if (val) {
 		/* Environment option */
 		unsigned int i;
-		for (i = 0; envp_init[i]; i++) {
-			if (i == MAX_INIT_ENVS) {
-				panic_later = "env";
-				panic_param = param;
+		if (release_mode == 1)
+		{
+			for (i = 0; envp_init_release[i]; i++) {
+				if (i == MAX_INIT_ENVS) {
+					panic_later = "env";
+					panic_param = param;
+				}
+				if (!strncmp(param, envp_init_release[i], val - param))
+					break;
 			}
-			if (!strncmp(param, envp_init[i], val - param))
-				break;
+			envp_init_release[i] = param;
 		}
-		envp_init[i] = param;
+		else
+		{
+			for (i = 0; envp_init[i]; i++) {
+				if (i == MAX_INIT_ENVS) {
+					panic_later = "env";
+					panic_param = param;
+				}
+				if (!strncmp(param, envp_init[i], val - param))
+					break;
+			}
+			envp_init[i] = param;
+		}
 	} else {
 		/* Command line option */
 		unsigned int i;
@@ -904,9 +931,18 @@ void __init load_default_modules(void)
 static int run_init_process(const char *init_filename)
 {
 	argv_init[0] = init_filename;
-	return do_execve(getname_kernel(init_filename),
-		(const char __user *const __user *)argv_init,
-		(const char __user *const __user *)envp_init);
+	if (release_mode == 1)
+	{
+		return do_execve(getname_kernel(init_filename),
+			(const char __user *const __user *)argv_init,
+			(const char __user *const __user *)envp_init_release);
+	}
+	else
+	{
+		return do_execve(getname_kernel(init_filename),
+			(const char __user *const __user *)argv_init,
+			(const char __user *const __user *)envp_init);
+	}
 }
 
 static int try_to_run_init_process(const char *init_filename)
